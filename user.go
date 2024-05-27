@@ -227,6 +227,19 @@ func (cli *Client) GetUserInfo(jids []types.JID) (map[types.JID]types.UserInfo, 
 	return respData, nil
 }
 
+func extractStringContent(n waBinary.Node) string {
+	var content string
+	switch nodeContent := n.Content.(type) {
+	case []byte:
+		content = string(nodeContent)
+	case []waBinary.Node:
+		for _, childNode := range nodeContent {
+			content += extractStringContent(childNode)
+		}
+	}
+	return content
+}
+
 func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessProfile, error) {
 	profileNode := node.GetChildByTag("profile")
 	jid, ok := profileNode.AttrGetter().GetJID("jid", true)
@@ -234,27 +247,8 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 		return nil, errors.New("missing jid in business profile")
 	}
 
-	// Helper function to extract string content from a node,
-	// handling both []byte and []waBinary.Node cases.
-	extractStringContent := func(n *waBinary.Node) string {
-		if n == nil {
-			return ""
-		}
-		switch content := n.Content.(type) {
-		case []byte:
-			return string(content)
-		case []waBinary.Node:
-			// Assuming the first node's content is the string we want.
-			// This might need adjustments based on the actual data structure.
-			if len(content) > 0 {
-				return extractStringContent(&content[0])
-			}
-		}
-		return ""
-	}
-
-	address := extractStringContent(&profileNode.GetChildByTag("address"))
-	email := extractStringContent(&profileNode.GetChildByTag("email"))
+	address := extractStringContent(profileNode.GetChildByTag("address"))
+	email := extractStringContent(profileNode.GetChildByTag("email"))
 
 	businessHour := profileNode.GetChildByTag("business_hours")
 	businessHourTimezone := businessHour.AttrGetter().String("timezone")
@@ -283,7 +277,7 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 			continue
 		}
 		id := category.AttrGetter().String("id")
-		name := extractStringContent(&category)
+		name := extractStringContent(category)
 		categories = append(categories, types.Category{
 			ID:   id,
 			Name: name,
@@ -293,7 +287,7 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 	profileOptionsNode := profileNode.GetChildByTag("profile_options")
 	profileOptions := make(map[string]string)
 	for _, option := range profileOptionsNode.GetChildren() {
-		profileOptions[option.Tag] = extractStringContent(&option)
+		profileOptions[option.Tag] = extractStringContent(option)
 	}
 
 	return &types.BusinessProfile{
