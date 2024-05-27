@@ -253,8 +253,8 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 		return ""
 	}
 
-	address := extractStringContent(profileNode.GetChildByTag("address"))
-	email := extractStringContent(profileNode.GetChildByTag("email"))
+	address := extractStringContent(&profileNode.GetChildByTag("address"))
+	email := extractStringContent(&profileNode.GetChildByTag("email"))
 
 	businessHour := profileNode.GetChildByTag("business_hours")
 	businessHourTimezone := businessHour.AttrGetter().String("timezone")
