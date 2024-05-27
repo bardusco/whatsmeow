@@ -163,6 +163,8 @@ type Category struct {
 // BusinessProfile contains the profile information of a WhatsApp business.
 type BusinessProfile struct {
 	JID                   JID
+	Description           string
+	Website               string
 	Address               string
 	Email                 string
 	Categories            []Category

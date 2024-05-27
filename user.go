@@ -247,8 +247,10 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 		return nil, errors.New("missing jid in business profile")
 	}
 
+	description := extractStringContent(profileNode.GetChildByTag("description"))
 	address := extractStringContent(profileNode.GetChildByTag("address"))
 	email := extractStringContent(profileNode.GetChildByTag("email"))
+	website := extractStringContent(profileNode.GetChildByTag("website"))
 
 	businessHour := profileNode.GetChildByTag("business_hours")
 	businessHourTimezone := businessHour.AttrGetter().String("timezone")
@@ -292,6 +294,8 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 
 	return &types.BusinessProfile{
 		JID:                   jid,
+		Description:           description,
+		Website:               website,
 		Email:                 email,
 		Address:               address,
 		Categories:            categories,
