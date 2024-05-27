@@ -258,12 +258,12 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 		if config.Tag != "business_hours_config" {
 			continue
 		}
-		dow := config.AttrGetter().String("dow")
+		dayOfWeek := config.AttrGetter().String("day_of_week")
 		mode := config.AttrGetter().String("mode")
 		openTime := config.AttrGetter().String("open_time")
 		closeTime := config.AttrGetter().String("close_time")
 		businessHours = append(businessHours, types.BusinessHoursConfig{
-			DayOfWeek: dow,
+			DayOfWeek: dayOfWeek,
 			Mode:      mode,
 			OpenTime:  openTime,
 			CloseTime: closeTime,
