@@ -233,8 +233,29 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 	if !ok {
 		return nil, errors.New("missing jid in business profile")
 	}
-	address := string(profileNode.GetChildByTag("address").Content.([]byte))
-	email := string(profileNode.GetChildByTag("email").Content.([]byte))
+
+	// Helper function to extract string content from a node,
+	// handling both []byte and []waBinary.Node cases.
+	extractStringContent := func(n *waBinary.Node) string {
+		if n == nil {
+			return ""
+		}
+		switch content := n.Content.(type) {
+		case []byte:
+			return string(content)
+		case []waBinary.Node:
+			// Assuming the first node's content is the string we want.
+			// This might need adjustments based on the actual data structure.
+			if len(content) > 0 {
+				return extractStringContent(&content[0])
+			}
+		}
+		return ""
+	}
+
+	address := extractStringContent(profileNode.GetChildByTag("address"))
+	email := extractStringContent(profileNode.GetChildByTag("email"))
+
 	businessHour := profileNode.GetChildByTag("business_hours")
 	businessHourTimezone := businessHour.AttrGetter().String("timezone")
 	businessHoursConfigs := businessHour.GetChildren()
@@ -254,6 +275,7 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 			CloseTime: closeTime,
 		})
 	}
+
 	categoriesNode := profileNode.GetChildByTag("categories")
 	categories := make([]types.Category, 0)
 	for _, category := range categoriesNode.GetChildren() {
@@ -261,17 +283,19 @@ func (cli *Client) parseBusinessProfile(node *waBinary.Node) (*types.BusinessPro
 			continue
 		}
 		id := category.AttrGetter().String("id")
-		name := string(category.Content.([]byte))
+		name := extractStringContent(&category)
 		categories = append(categories, types.Category{
 			ID:   id,
 			Name: name,
 		})
 	}
+
 	profileOptionsNode := profileNode.GetChildByTag("profile_options")
 	profileOptions := make(map[string]string)
 	for _, option := range profileOptionsNode.GetChildren() {
-		profileOptions[option.Tag] = string(option.Content.([]byte))
+		profileOptions[option.Tag] = extractStringContent(&option)
 	}
+
 	return &types.BusinessProfile{
 		JID:                   jid,
 		Email:                 email,
