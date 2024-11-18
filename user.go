@@ -750,6 +750,9 @@ type UsyncQueryExtras struct {
 }
 
 func (cli *Client) usync(ctx context.Context, jids []types.JID, mode, context string, query []waBinary.Node, extra ...UsyncQueryExtras) (*waBinary.Node, error) {
+	if cli == nil {
+		return nil, ErrClientIsNil
+	}
 	var extras UsyncQueryExtras
 	if len(extra) > 1 {
 		return nil, errors.New("only one extra parameter may be provided to usync()")
@@ -866,6 +869,9 @@ func (cli *Client) UpdateBlocklist(jid types.JID, action events.BlocklistChangeA
 			},
 		}},
 	})
+	if err != nil {
+		return nil, err
+	}
 	list, ok := resp.GetOptionalChildByTag("list")
 	if !ok {
 		return nil, &ElementMissingError{Tag: "list", In: "response to blocklist update"}
