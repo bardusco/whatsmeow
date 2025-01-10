@@ -267,14 +267,34 @@ func (proc *Processor) DecodePatches(list *PatchList, initialState HashState, va
 		currentState.Version = version
 		var warn []error
 		warn, err = currentState.updateHash(patch.GetMutations(), func(indexMAC []byte, maxIndex int) ([]byte, error) {
+			if patch == nil || patch.Mutations == nil {
+				return nil, fmt.Errorf("patch or mutations is nil")
+			}
 			for i := maxIndex - 1; i >= 0; i-- {
-				if bytes.Equal(patch.Mutations[i].GetRecord().GetIndex().GetBlob(), indexMAC) {
-					value := patch.Mutations[i].GetRecord().GetValue().GetBlob()
+				if i >= len(patch.Mutations) {
+					continue
+				}
+				mutation := patch.Mutations[i]
+				if mutation == nil || mutation.GetRecord() == nil {
+					continue
+				}
+				if bytes.Equal(mutation.GetRecord().GetIndex().GetBlob(), indexMAC) {
+					value := mutation.GetRecord().GetValue().GetBlob()
+					if len(value) < 32 {
+						return nil, fmt.Errorf("value blob too short")
+					}
 					return value[len(value)-32:], nil
 				}
 			}
 			// Previous value not found in current patch, look in the database
-			return proc.Store.AppState.GetAppStateMutationMAC(string(list.Name), indexMAC)
+			if proc.Store == nil || proc.Store.AppState == nil {
+				return nil, fmt.Errorf("store or app state is nil")
+			}
+			mac, err := proc.Store.AppState.GetAppStateMutationMAC(string(list.Name), indexMAC)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get MAC from store: %w", err)
+			}
+			return mac, nil
 		})
 		if len(warn) > 0 {
 			proc.Log.Warnf("Warnings while updating hash for %s: %+v", list.Name, warn)
