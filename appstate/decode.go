@@ -188,9 +188,21 @@ func (proc *Processor) storeMACs(name WAPatchName, currentState HashState, out *
 }
 
 func (proc *Processor) validateSnapshotMAC(name WAPatchName, currentState HashState, keyID, expectedSnapshotMAC []byte) (keys ExpandedAppStateKeys, err error) {
+	if proc == nil {
+		err = fmt.Errorf("processor is nil")
+		return
+	}
+	if keyID == nil {
+		err = fmt.Errorf("keyID is nil")
+		return
+	}
 	keys, err = proc.getAppStateKey(keyID)
 	if err != nil {
 		err = fmt.Errorf("failed to get key %X to verify patch v%d MACs: %w", keyID, currentState.Version, err)
+		return
+	}
+	if keys.SnapshotMAC == nil {
+		err = fmt.Errorf("snapshot MAC key is nil")
 		return
 	}
 	snapshotMAC := currentState.generateSnapshotMAC(name, keys.SnapshotMAC)
@@ -201,6 +213,14 @@ func (proc *Processor) validateSnapshotMAC(name WAPatchName, currentState HashSt
 }
 
 func (proc *Processor) decodeSnapshot(name WAPatchName, ss *waProto.SyncdSnapshot, initialState HashState, validateMACs bool, newMutationsInput []Mutation) (newMutations []Mutation, currentState HashState, err error) {
+	if proc == nil {
+		err = fmt.Errorf("processor is nil")
+		return
+	}
+	if ss == nil {
+		err = fmt.Errorf("snapshot is nil") 
+		return
+	}
 	currentState = initialState
 	currentState.Version = ss.GetVersion().GetVersion()
 
