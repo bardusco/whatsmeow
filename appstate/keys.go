@@ -92,7 +92,11 @@ func (proc *Processor) getAppStateKey(keyID []byte) (keys ExpandedAppStateKeys, 
 	keys, ok = proc.keyCache[keyCacheID]
 	if !ok {
 		var keyData *store.AppStateSyncKey
-		keyData, err = proc.Store.AppStateKeys.GetAppStateSyncKey(keyID)
+		if proc.Store.AppStateKeys == nil {
+			err = ErrKeyNotFound
+		} else {
+			keyData, err = proc.Store.AppStateKeys.GetAppStateSyncKey(keyID)
+		}
 		if keyData != nil {
 			keys = expandAppStateKeys(keyData.Data)
 			proc.keyCache[keyCacheID] = keys
