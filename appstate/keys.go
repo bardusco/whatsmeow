@@ -117,11 +117,17 @@ func (proc *Processor) GetMissingKeyIDs(pl *PatchList) [][]byte {
 		stringKeyID := base64.RawStdEncoding.EncodeToString(keyID)
 		_, alreadyAdded := cache[stringKeyID]
 		if !alreadyAdded {
-			keyData, err := proc.Store.AppStateKeys.GetAppStateSyncKey(keyID)
-			if err != nil {
-				proc.Log.Warnf("Error fetching key %X while checking if it's missing: %v", keyID, err)
+			var (
+				keyData *store.AppStateSyncKey
+				err     error
+			)
+			if proc.Store.AppStateKeys != nil {
+				keyData, err = proc.Store.AppStateKeys.GetAppStateSyncKey(keyID)
+				if err != nil {
+					proc.Log.Warnf("Error fetching key %X while checking if it's missing: %v", keyID, err)
+				}
 			}
-			missing := keyData == nil && err == nil
+			missing := (proc.Store.AppStateKeys == nil || keyData == nil) && err == nil
 			cache[stringKeyID] = missing
 			if missing {
 				missingKeys = append(missingKeys, keyID)
