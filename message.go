@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"go.mau.fi/libsignal/groups"
@@ -71,6 +72,11 @@ func (cli *Client) parseMessageSource(node *waBinary.Node, requireParticipant bo
 	ag := node.AttrGetter()
 	from := ag.JID("from")
 	source.AddressingMode = types.AddressingMode(ag.OptionalString("addressing_mode"))
+	
+	// Auto-detect LID addressing mode if not explicitly set but from contains @lid
+	if source.AddressingMode == "" && strings.HasSuffix(from.String(), "@lid") {
+		source.AddressingMode = types.AddressingModeLID
+	}
 	if from.Server == types.GroupServer || from.Server == types.BroadcastServer {
 		source.IsGroup = true
 		source.Chat = from
