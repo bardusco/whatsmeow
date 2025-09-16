@@ -232,19 +232,6 @@ func (cli *Client) GetUserInfo(jids []types.JID) (map[types.JID]types.UserInfo, 
 	return respData, nil
 }
 
-func extractStringContent(n waBinary.Node) string {
-	var content string
-	switch nodeContent := n.Content.(type) {
-	case []byte:
-		content = string(nodeContent)
-	case []waBinary.Node:
-		for _, childNode := range nodeContent {
-			content += extractStringContent(childNode)
-		}
-	}
-	return content
-}
-
 func (cli *Client) GetBotListV2() ([]types.BotListInfo, error) {
 	resp, err := cli.sendIQ(infoQuery{
 		To:        types.ServerJID,
