@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime/debug"
 	"slices"
 
 	"google.golang.org/protobuf/proto"
@@ -54,18 +55,41 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 }
 
 func (cli *Client) handleAppStateNotification(ctx context.Context, node *waBinary.Node) {
+	// Recover from panics to prevent a single app state sync failure from
+	// crashing the entire goroutine (and effectively killing the tenant).
+	// This can happen when the local database was cleaned but the server
+	// sends incremental patches referencing state that no longer exists.
+	var currentName appstate.WAPatchName
+	defer func() {
+		if r := recover(); r != nil {
+			cli.Log.Errorf("Panic in handleAppStateNotification (recovered) while processing %s: %v\n%s",
+				currentName, r, debug.Stack())
+		}
+	}()
+
 	for _, collection := range node.GetChildrenByTag("collection") {
 		ag := collection.AttrGetter()
-		name := appstate.WAPatchName(ag.String("name"))
+		currentName = appstate.WAPatchName(ag.String("name"))
 		version := ag.Uint64("version")
-		cli.Log.Debugf("Got server sync notification that app state %s has updated to version %d", name, version)
-		err := cli.FetchAppState(ctx, name, false, false)
+		cli.Log.Debugf("Got server sync notification that app state %s has updated to version %d", currentName, version)
+		err := cli.FetchAppState(ctx, currentName, false, false)
 		if errors.Is(err, ErrIQDisconnected) || errors.Is(err, ErrNotConnected) {
 			// There are some app state changes right before a remote logout, so stop syncing if we're disconnected.
 			cli.Log.Debugf("Failed to sync app state after notification: %v, not trying to sync other states", err)
 			return
 		} else if err != nil {
-			cli.Log.Errorf("Failed to sync app state after notification: %v", err)
+			cli.Log.Errorf("Failed to sync app state %s after notification: %v, attempting full sync", currentName, err)
+			// If incremental sync failed (e.g. because local state was wiped),
+			// try a full sync with snapshot to rebuild from scratch.
+			// The defer/recover above also covers this call in case fullSync panics.
+			fullErr := cli.FetchAppState(ctx, currentName, true, false)
+			if fullErr != nil {
+				if errors.Is(fullErr, ErrIQDisconnected) || errors.Is(fullErr, ErrNotConnected) {
+					cli.Log.Debugf("Full sync of %s aborted: client disconnected", currentName)
+					return
+				}
+				cli.Log.Errorf("Full sync of app state %s also failed: %v", currentName, fullErr)
+			}
 		}
 	}
 }
