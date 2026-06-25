@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -400,7 +401,24 @@ func (proc *Processor) DecodePatches(
 			if len(warn) > 0 {
 				proc.Log.Warnf("Warnings while updating hash for %s: %+v", list.Name, warn)
 			}
-			return
+			// When LTHash verification fails, the mutations are still correctly
+			// encrypted/decryptable — the LTHash is an integrity check over the
+			// collection state, not a decryption key. Re-process the patch without
+			// MAC validation so we can still decode the mutations and advance the
+			// version cursor. This prevents companion-device app-state writes
+			// (labels, archive, mute) from permanently breaking the sync when the
+			// primary device writes concurrent mutations that cause hash divergence.
+			// See: https://github.com/tulir/whatsmeow/issues/858
+			if errors.Is(err, ErrMismatchingLTHash) || errors.Is(err, ErrMissingPreviousSetValueOperation) {
+				proc.Log.Warnf("LTHash verification failed for %s patch v%d, continuing without MAC validation: %v",
+					list.Name, patch.GetVersion().GetVersion(), err)
+				newState, _, err = proc.validatePatch(ctx, list.Name, patch, currentState, false)
+				if err != nil {
+					return
+				}
+			} else {
+				return
+			}
 		}
 
 		out.Mutations = newMutations
