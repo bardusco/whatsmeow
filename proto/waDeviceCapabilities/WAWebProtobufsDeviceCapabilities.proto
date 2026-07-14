@@ -25,12 +25,20 @@ message DeviceCapabilities {
 		optional SupportLevel supportLevel = 1;
 	}
 
+	message AiFbidMigration {
+		optional uint64 chatDbMigrationTimestamp = 1;
+	}
+
 	message UserHasAvatar {
 		optional bool userHasAvatar = 1;
 	}
 
 	message BusinessBroadcast {
 		optional bool importListEnabled = 1;
+		optional bool companionSupportEnabled = 2;
+		optional bool campaignSyncEnabled = 3;
+		optional bool insightsSyncEnabled = 4;
+		optional int32 recipientLimit = 5;
 	}
 
 	message LIDMigration {
@@ -43,4 +51,5 @@ message DeviceCapabilities {
 	optional UserHasAvatar userHasAvatar = 4;
 	optional MemberNameTagPrimarySupport memberNameTagPrimarySupport = 5;
 	optional AiThread aiThread = 6;
+	optional AiFbidMigration aiFbidMigration = 7;
 }

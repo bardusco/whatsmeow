@@ -9,6 +9,7 @@ package appstate
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -123,7 +124,7 @@ func (out *patchOutput) RemoveMAC(indexMAC []byte) {
 	out.RemovedMACs = append(out.RemovedMACs, indexMAC)
 	// If the mutation was previously added in this patch, remove it from AddedMACs
 	out.AddedMACs = slices.DeleteFunc(out.AddedMACs, func(mac store.AppStateMutationMAC) bool {
-		return bytes.Equal(mac.IndexMAC, indexMAC)
+		return hmac.Equal(mac.IndexMAC, indexMAC)
 	})
 }
 
@@ -150,7 +151,7 @@ func (proc *Processor) decodeMutation(
 	content, valueMAC = content[:len(content)-32], content[len(content)-32:]
 	if validateMACs {
 		expectedValueMAC := generateContentMAC(mutation.GetOperation(), content, keyID, keys.ValueMAC)
-		if !bytes.Equal(expectedValueMAC, valueMAC) {
+		if !hmac.Equal(expectedValueMAC, valueMAC) {
 			err = fmt.Errorf("failed to verify mutation #%d: %w", i+1, ErrMismatchingContentMAC)
 			return
 		}
@@ -170,7 +171,7 @@ func (proc *Processor) decodeMutation(
 	indexMAC = mutation.GetRecord().GetIndex().GetBlob()
 	if validateMACs {
 		expectedIndexMAC := concatAndHMAC(sha256.New, keys.Index, syncAction.Index)
-		if !bytes.Equal(expectedIndexMAC, indexMAC) {
+		if !hmac.Equal(expectedIndexMAC, indexMAC) {
 			err = fmt.Errorf("failed to verify mutation #%d: %w", i+1, ErrMismatchingIndexMAC)
 			return
 		}
@@ -261,7 +262,7 @@ func (proc *Processor) validateSnapshotMAC(ctx context.Context, name WAPatchName
 		return
 	}
 	snapshotMAC := currentState.generateSnapshotMAC(name, keys.SnapshotMAC)
-	if !bytes.Equal(snapshotMAC, expectedSnapshotMAC) {
+	if !hmac.Equal(snapshotMAC, expectedSnapshotMAC) {
 		err = fmt.Errorf("failed to verify patch v%d: %w", currentState.Version, ErrMismatchingLTHash)
 	}
 	return
@@ -334,7 +335,7 @@ func (proc *Processor) validatePatch(
 	newState.Version = version
 	warn, err = newState.updateHash(patch.GetMutations(), func(indexMAC []byte, maxIndex int) ([]byte, error) {
 		for i := maxIndex - 1; i >= 0; i-- {
-			if bytes.Equal(patch.Mutations[i].GetRecord().GetIndex().GetBlob(), indexMAC) {
+			if hmac.Equal(patch.Mutations[i].GetRecord().GetIndex().GetBlob(), indexMAC) {
 				if patch.Mutations[i].GetOperation() == waServerSync.SyncdMutation_SET {
 					value := patch.Mutations[i].GetRecord().GetValue().GetBlob()
 					return value[len(value)-32:], nil
@@ -358,12 +359,16 @@ func (proc *Processor) validatePatch(
 			return
 		}
 		patchMAC := generatePatchMAC(patch, patchName, keys.PatchMAC, patch.GetVersion().GetVersion())
-		if !bytes.Equal(patchMAC, patch.GetPatchMAC()) {
+		if !hmac.Equal(patchMAC, patch.GetPatchMAC()) {
 			err = fmt.Errorf("failed to verify patch v%d: %w", version, ErrMismatchingPatchMAC)
 			return
 		}
 	}
 	return
+}
+
+func shouldRetryPatchWithoutMAC(err error) bool {
+	return errors.Is(err, ErrMismatchingLTHash) || errors.Is(err, ErrMissingPreviousSetValueOperation)
 }
 
 // DecodePatches will decode all the patches in a PatchList into a list of app state mutations.
@@ -391,7 +396,6 @@ func (proc *Processor) DecodePatches(
 	}
 
 	for _, patch := range list.Patches {
-
 		var out patchOutput
 		var warn []error
 		var newState HashState
@@ -409,7 +413,7 @@ func (proc *Processor) DecodePatches(
 			// (labels, archive, mute) from permanently breaking the sync when the
 			// primary device writes concurrent mutations that cause hash divergence.
 			// See: https://github.com/tulir/whatsmeow/issues/858
-			if errors.Is(err, ErrMismatchingLTHash) || errors.Is(err, ErrMissingPreviousSetValueOperation) {
+			if shouldRetryPatchWithoutMAC(err) {
 				proc.Log.Warnf("LTHash verification failed for %s patch v%d, continuing without MAC validation: %v",
 					list.Name, patch.GetVersion().GetVersion(), err)
 				newState, _, err = proc.validatePatch(ctx, list.Name, patch, currentState, false)
