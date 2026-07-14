@@ -100,6 +100,7 @@ func SetWAVersion(version WAVersionContainer) {
 	}
 	waVersion = version
 	waVersionHash = version.Hash()
+	BaseClientPayload.UserAgent.AppVersion = waVersion.ProtoAppVersion()
 }
 
 var BaseClientPayload = &waWa6.ClientPayload{
