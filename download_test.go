@@ -56,6 +56,20 @@ func TestDownloadAndDecryptAllowsMissingPlaintextHash(t *testing.T) {
 	}
 }
 
+func TestDownloadAndDecryptAcceptsCorrectPlaintextHash(t *testing.T) {
+	plaintext := []byte("encrypted media with a valid plaintext hash")
+	client, downloadURL, mediaKey, encHash := prepareEncryptedDownload(t, plaintext)
+	plainHash := sha256.Sum256(plaintext)
+
+	got, err := client.downloadAndDecrypt(context.Background(), downloadURL, mediaKey, MediaImage, encHash, plainHash[:])
+	if err != nil {
+		t.Fatalf("downloadAndDecrypt() error = %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Fatalf("downloadAndDecrypt() = %q, want %q", got, plaintext)
+	}
+}
+
 func TestDownloadAndDecryptStillRejectsWrongPlaintextHash(t *testing.T) {
 	client, downloadURL, mediaKey, encHash := prepareEncryptedDownload(t, []byte("encrypted media"))
 	wrongHash := bytes.Repeat([]byte{0x99}, sha256.Size)
@@ -81,6 +95,29 @@ func TestDownloadAndDecryptToFileAllowsMissingPlaintextHash(t *testing.T) {
 	}
 	if _, err = file.Seek(0, 0); err != nil {
 		t.Fatalf("failed to seek output: %v", err)
+	}
+	got, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatalf("failed to read output: %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Fatalf("downloaded file = %q, want %q", got, plaintext)
+	}
+}
+
+func TestDownloadAndDecryptToFileAcceptsCorrectPlaintextHash(t *testing.T) {
+	plaintext := []byte("encrypted file with a valid plaintext hash")
+	client, downloadURL, mediaKey, encHash := prepareEncryptedDownload(t, plaintext)
+	plainHash := sha256.Sum256(plaintext)
+	file, err := os.CreateTemp(t.TempDir(), "download-*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer file.Close()
+
+	err = client.downloadAndDecryptToFile(context.Background(), downloadURL, mediaKey, MediaImage, encHash, plainHash[:], file)
+	if err != nil {
+		t.Fatalf("downloadAndDecryptToFile() error = %v", err)
 	}
 	got, err := os.ReadFile(file.Name())
 	if err != nil {

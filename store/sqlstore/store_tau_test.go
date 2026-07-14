@@ -7,12 +7,26 @@
 package sqlstore
 
 import (
-	"strings"
 	"testing"
+
+	"go.mau.fi/whatsmeow/store"
 )
 
-func TestGetAllAppStateSyncKeysQueryFiltersEmptyKeyData(t *testing.T) {
-	if !strings.Contains(getAllAppStateSyncKeysQuery, "length(key_data) > 0") {
-		t.Fatalf("query must preserve the deployed behavior of filtering empty app-state keys: %s", getAllAppStateSyncKeysQuery)
+func TestFilterEmptyAppStateSyncKeys(t *testing.T) {
+	validFirst := &store.AppStateSyncKey{Data: []byte{0x01}}
+	validSecond := &store.AppStateSyncKey{Data: []byte{0x02, 0x03}}
+	keys := []*store.AppStateSyncKey{
+		validFirst,
+		{},
+		nil,
+		validSecond,
+	}
+
+	filtered := filterEmptyAppStateSyncKeys(keys)
+	if len(filtered) != 2 {
+		t.Fatalf("filtered key count = %d, want 2", len(filtered))
+	}
+	if filtered[0] != validFirst || filtered[1] != validSecond {
+		t.Fatalf("filtered keys = %#v, want the two non-empty keys in order", filtered)
 	}
 }
