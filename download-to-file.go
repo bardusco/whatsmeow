@@ -67,6 +67,8 @@ func (cli *Client) DownloadFBToFile(
 	)
 }
 
+// DownloadMediaWithOnlyPathToFile downloads media without verifying an expected SHA-256 hash.
+// Prefer DownloadToFile or DownloadMediaWithPathToFile whenever the message metadata includes hashes.
 func (cli *Client) DownloadMediaWithOnlyPathToFile(ctx context.Context, directPath string, file File) error {
 	return cli.DownloadMediaWithPathToFile(ctx, directPath, nil, nil, nil, "", "", true, file)
 }
@@ -144,6 +146,8 @@ func (cli *Client) downloadAndDecryptToFile(
 		return fmt.Errorf("failed to seek to start of file after validating mac: %w", err)
 	} else if err = cbcutil.DecryptFile(cipherKey, iv, file); err != nil {
 		return fmt.Errorf("failed to decrypt file: %w", err)
+	} else if fileSHA256 == nil {
+		return nil
 	} else if _, err = file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("failed to seek to start of file after decrypting: %w", err)
 	} else if _, err = io.Copy(hasher, file); err != nil {
