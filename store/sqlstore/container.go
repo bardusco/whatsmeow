@@ -121,7 +121,7 @@ func (c *Container) Upgrade(ctx context.Context) error {
 		}
 		return c.db.Upgrade(ctx)
 	} else if c.db.Dialect == dbutil.Postgres {
-		return c.db.DoTxn(ctx, nil, func(txCtx context.Context) error {
+		return c.db.DoTxn(ctx, &dbutil.TxnOptions{Isolation: sql.LevelReadCommitted}, func(txCtx context.Context) error {
 			_, err := c.db.Exec(
 				txCtx,
 				"SELECT pg_advisory_xact_lock($1, $2)",

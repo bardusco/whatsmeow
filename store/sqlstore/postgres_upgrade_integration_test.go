@@ -45,6 +45,11 @@ func postgresDSNWithOptions(baseDSN, schema, applicationName string) string {
 	return fmt.Sprintf("%s search_path=%s application_name=%s", baseDSN, schema, applicationName)
 }
 
+func postgresRepeatableReadDSN(baseDSN, schema, applicationName string) string {
+	return postgresDSNWithOptions(baseDSN, schema, applicationName) +
+		" default_transaction_isolation='repeatable read'"
+}
+
 func preparePostgresV13Fixture(t *testing.T) (context.Context, string, *sql.DB, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -190,12 +195,35 @@ func assertPostgresSchemaV14(t *testing.T, ctx context.Context, db *sql.DB) {
 	}
 }
 
-func TestConcurrentPostgresUpgradeIsSerialized(t *testing.T) {
+func TestConcurrentPostgresUpgradeIsSerializedWithRepeatableReadDefault(t *testing.T) {
 	ctx, baseDSN, fixtureDB, testID := preparePostgresV13Fixture(t)
 	blocker, releaseBlocker := acquirePostgresUpgradeBlocker(t, ctx, fixtureDB)
 
 	const workers = 8
 	applicationPrefix := "whatsmeow_wait_" + testID + "_"
+	probeDB, err := sql.Open(
+		"postgres",
+		postgresRepeatableReadDSN(
+			baseDSN,
+			"whatsmeow_upgrade_"+testID,
+			applicationPrefix+"probe",
+		),
+	)
+	if err != nil {
+		t.Fatalf("failed to open repeatable-read probe: %v", err)
+	}
+	var defaultIsolation string
+	if err = probeDB.QueryRowContext(ctx, "SHOW default_transaction_isolation").Scan(&defaultIsolation); err != nil {
+		_ = probeDB.Close()
+		t.Fatalf("failed to inspect repeatable-read probe: %v", err)
+	}
+	if closeErr := probeDB.Close(); closeErr != nil {
+		t.Fatalf("failed to close repeatable-read probe: %v", closeErr)
+	}
+	if defaultIsolation != "repeatable read" {
+		t.Fatalf("worker default isolation = %q, want repeatable read", defaultIsolation)
+	}
+
 	results := make(chan error, workers)
 	var started sync.WaitGroup
 	started.Add(workers)
@@ -204,7 +232,7 @@ func TestConcurrentPostgresUpgradeIsSerialized(t *testing.T) {
 		go func(worker int) {
 			<-start
 			started.Done()
-			dsn := postgresDSNWithOptions(
+			dsn := postgresRepeatableReadDSN(
 				baseDSN,
 				"whatsmeow_upgrade_"+testID,
 				fmt.Sprintf("%s%d", applicationPrefix, worker),
