@@ -97,7 +97,19 @@ func NewWithWrappedDB(wrapped *dbutil.Database, log waLog.Logger) *Container {
 	}
 }
 
+const (
+	// postgresUpgradeLockNamespace and postgresUpgradeLockID are the two halves of
+	// the database-wide advisory lock that serializes whatsmeow schema upgrades.
+	// The values encode "WMOW" and "UPGR" and must remain stable across releases.
+	postgresUpgradeLockNamespace int32 = 0x574d4f57
+	postgresUpgradeLockID        int32 = 0x55504752
+)
+
 // Upgrade upgrades the database from the current to the latest version available.
+//
+// PostgreSQL upgrades are serialized across processes. Callers must invoke Upgrade
+// before performing other SQL work in an existing transaction to avoid lock-order
+// inversions with the advisory lock.
 func (c *Container) Upgrade(ctx context.Context) error {
 	if c.db.Dialect == dbutil.SQLite {
 		var foreignKeysEnabled bool
@@ -107,6 +119,23 @@ func (c *Container) Upgrade(ctx context.Context) error {
 		} else if !foreignKeysEnabled {
 			return fmt.Errorf("foreign keys are not enabled")
 		}
+		return c.db.Upgrade(ctx)
+	} else if c.db.Dialect == dbutil.Postgres {
+		return c.db.DoTxn(ctx, &dbutil.TxnOptions{Isolation: sql.LevelReadCommitted}, func(txCtx context.Context) error {
+			_, err := c.db.Exec(
+				txCtx,
+				"SELECT pg_advisory_xact_lock($1, $2)",
+				postgresUpgradeLockNamespace,
+				postgresUpgradeLockID,
+			)
+			if err != nil {
+				if ctxErr := txCtx.Err(); ctxErr != nil {
+					return fmt.Errorf("failed to acquire postgres schema upgrade lock: %w", ctxErr)
+				}
+				return fmt.Errorf("failed to acquire postgres schema upgrade lock: %w", err)
+			}
+			return c.db.Upgrade(txCtx)
+		})
 	}
 
 	return c.db.Upgrade(ctx)
