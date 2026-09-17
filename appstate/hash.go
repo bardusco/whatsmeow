@@ -36,14 +36,28 @@ type HashState struct {
 	Hash    [128]byte
 }
 
+// valueMACSuffix returns the trailing 32-byte value MAC of an app state mutation
+// value blob, or nil when the blob is too short to carry one. Value blobs come
+// from the server and from companion devices, so slicing them blindly turns a
+// malformed patch into a panic that the caller cannot recover from.
+func valueMACSuffix(value []byte) []byte {
+	if len(value) < 32 {
+		return nil
+	}
+	return value[len(value)-32:]
+}
+
 func (hs *HashState) updateHash(mutations []*waServerSync.SyncdMutation, getPrevSetValueMAC func(indexMAC []byte, maxIndex int) ([]byte, error)) ([]error, error) {
 	var added, removed [][]byte
 	var warnings []error
 
 	for i, mutation := range mutations {
 		if mutation.GetOperation() == waServerSync.SyncdMutation_SET {
-			value := mutation.GetRecord().GetValue().GetBlob()
-			added = append(added, value[len(value)-32:])
+			valueMAC := valueMACSuffix(mutation.GetRecord().GetValue().GetBlob())
+			if valueMAC == nil {
+				return warnings, fmt.Errorf("%w (mutation %d)", ErrInvalidMutationValue, i)
+			}
+			added = append(added, valueMAC)
 		}
 		indexMAC := mutation.GetRecord().GetIndex().GetBlob()
 		removal, err := getPrevSetValueMAC(indexMAC, i)
@@ -86,8 +100,9 @@ func generatePatchMAC(patch *waServerSync.SyncdPatch, name WAPatchName, key []by
 	dataToHash := make([][]byte, len(patch.GetMutations())+3)
 	dataToHash[0] = patch.GetSnapshotMAC()
 	for i, mutation := range patch.Mutations {
-		val := mutation.GetRecord().GetValue().GetBlob()
-		dataToHash[i+1] = val[len(val)-32:]
+		// A blob too short to carry a value MAC contributes nothing instead of
+		// panicking; the resulting MAC simply fails verification.
+		dataToHash[i+1] = valueMACSuffix(mutation.GetRecord().GetValue().GetBlob())
 	}
 	dataToHash[len(dataToHash)-2] = uint64ToBytes(version)
 	dataToHash[len(dataToHash)-1] = []byte(name)

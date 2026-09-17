@@ -148,6 +148,13 @@ func (proc *Processor) decodeMutation(
 		return
 	}
 	content := bytes.Clone(mutation.GetRecord().GetValue().GetBlob())
+	// The blob must hold at least the 16-byte IV plus the trailing 32-byte value
+	// MAC. It comes from the server, so a short blob must be rejected instead of
+	// slicing out of range and panicking.
+	if len(content) < 48 {
+		err = fmt.Errorf("failed to decode mutation #%d: %w", i+1, ErrInvalidMutationValue)
+		return
+	}
 	content, valueMAC = content[:len(content)-32], content[len(content)-32:]
 	if validateMACs {
 		expectedValueMAC := generateContentMAC(mutation.GetOperation(), content, keyID, keys.ValueMAC)
@@ -227,16 +234,33 @@ func (proc *Processor) decodeMutations(
 	return nil
 }
 
+// appStateStore returns the device's app state store, or ErrMissingAppStateStore
+// when it is not available. Every app state code path must go through this
+// instead of dereferencing proc.Store.AppState directly: the store is a nil
+// interface on a device that was never persisted, and calling a method on it is
+// an unrecoverable nil dereference that takes the whole process down, including
+// every other session the host multiplexes.
+func (proc *Processor) appStateStore() (store.AppStateStore, error) {
+	if proc == nil || proc.Store == nil || proc.Store.AppState == nil {
+		return nil, ErrMissingAppStateStore
+	}
+	return proc.Store.AppState, nil
+}
+
 func (proc *Processor) storeMACs(ctx context.Context, name WAPatchName, currentState HashState, out *patchOutput) error {
-	err := proc.Store.AppState.PutAppStateVersion(ctx, string(name), currentState.Version, currentState.Hash)
+	appState, err := proc.appStateStore()
+	if err != nil {
+		return fmt.Errorf("failed to store MACs for %s: %w", name, err)
+	}
+	err = appState.PutAppStateVersion(ctx, string(name), currentState.Version, currentState.Hash)
 	if err != nil {
 		return fmt.Errorf("failed to update app state version in the database: %w", err)
 	}
-	err = proc.Store.AppState.DeleteAppStateMutationMACs(ctx, string(name), out.RemovedMACs)
+	err = appState.DeleteAppStateMutationMACs(ctx, string(name), out.RemovedMACs)
 	if err != nil {
 		return fmt.Errorf("failed to remove deleted mutation MACs from the database: %w", err)
 	}
-	err = proc.Store.AppState.PutAppStateMutationMACs(ctx, string(name), currentState.Version, out.AddedMACs)
+	err = appState.PutAppStateMutationMACs(ctx, string(name), currentState.Version, out.AddedMACs)
 	if err != nil {
 		return fmt.Errorf("failed to insert added mutation MACs to the database: %w", err)
 	}
@@ -337,15 +361,22 @@ func (proc *Processor) validatePatch(
 		for i := maxIndex - 1; i >= 0; i-- {
 			if hmac.Equal(patch.Mutations[i].GetRecord().GetIndex().GetBlob(), indexMAC) {
 				if patch.Mutations[i].GetOperation() == waServerSync.SyncdMutation_SET {
-					value := patch.Mutations[i].GetRecord().GetValue().GetBlob()
-					return value[len(value)-32:], nil
+					valueMAC := valueMACSuffix(patch.Mutations[i].GetRecord().GetValue().GetBlob())
+					if valueMAC == nil {
+						return nil, fmt.Errorf("%w (patch %s v%d, mutation %d)", ErrInvalidMutationValue, patchName, version, i)
+					}
+					return valueMAC, nil
 				}
 				// Found a REMOVE operation, no previous value
 				return nil, nil
 			}
 		}
 		// Previous value not found in current patch, look in the database
-		return proc.Store.AppState.GetAppStateMutationMAC(ctx, string(patchName), indexMAC)
+		appState, err := proc.appStateStore()
+		if err != nil {
+			return nil, fmt.Errorf("failed to look up previous value MAC for %s: %w", patchName, err)
+		}
+		return appState.GetAppStateMutationMAC(ctx, string(patchName), indexMAC)
 	})
 	if err != nil {
 		err = fmt.Errorf("failed to update state hash: %w", err)

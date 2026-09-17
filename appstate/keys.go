@@ -179,7 +179,7 @@ func (proc *Processor) getAppStateKey(ctx context.Context, keyID []byte) (keys E
 	keys, ok = proc.keyCache[keyCacheID]
 	if !ok {
 		var keyData *store.AppStateSyncKey
-		if proc.Store.AppStateKeys == nil {
+		if proc.Store == nil || proc.Store.AppStateKeys == nil {
 			err = ErrKeyNotFound
 		} else {
 			keyData, err = proc.Store.AppStateKeys.GetAppStateSyncKey(ctx, keyID)
