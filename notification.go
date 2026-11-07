@@ -71,7 +71,7 @@ func (cli *Client) handleEncryptNotification(ctx context.Context, node *waBinary
 	}
 }
 
-func (cli *Client) handleAppStateNotification(ctx context.Context, node *waBinary.Node) {
+func (cli *Client) handleAppStateNotification(ctx context.Context, node *waBinary.Node) (success bool) {
 	// Recover from panics to prevent a single app state sync failure from
 	// crashing the entire goroutine (and effectively killing the tenant).
 	// This can happen when the local database was cleaned but the server
@@ -81,6 +81,8 @@ func (cli *Client) handleAppStateNotification(ctx context.Context, node *waBinar
 		if r := recover(); r != nil {
 			cli.Log.Errorf("Panic in handleAppStateNotification (recovered) while processing %s: %v\n%s",
 				currentName, r, debug.Stack())
+			// Leave the notification unacknowledged so it can be retried.
+			success = false
 		}
 	}()
 
@@ -93,7 +95,9 @@ func (cli *Client) handleAppStateNotification(ctx context.Context, node *waBinar
 		if errors.Is(err, ErrIQDisconnected) || errors.Is(err, ErrNotConnected) {
 			// There are some app state changes right before a remote logout, so stop syncing if we're disconnected.
 			cli.Log.Debugf("Failed to sync app state after notification: %v, not trying to sync other states", err)
-			return
+			return false
+		} else if errors.Is(err, ErrAppStateRateLimited) {
+			cli.Log.Debugf("Not syncing app state after notification: %v", err)
 		} else if err != nil {
 			cli.Log.Errorf("Failed to sync app state %s after notification: %v, attempting full sync", currentName, err)
 			// If incremental sync failed (e.g. because local state was wiped),
@@ -103,12 +107,13 @@ func (cli *Client) handleAppStateNotification(ctx context.Context, node *waBinar
 			if fullErr != nil {
 				if errors.Is(fullErr, ErrIQDisconnected) || errors.Is(fullErr, ErrNotConnected) {
 					cli.Log.Debugf("Full sync of %s aborted: client disconnected", currentName)
-					return
+					return false
 				}
 				cli.Log.Errorf("Full sync of app state %s also failed: %v", currentName, fullErr)
 			}
 		}
 	}
+	return true
 }
 
 func (cli *Client) handlePictureNotification(ctx context.Context, node *waBinary.Node) {
@@ -389,6 +394,8 @@ func (cli *Client) parseNewsletterMessages(node *waBinary.Node) []*types.Newslet
 				}
 			case "views_count":
 				msg.ViewsCount = subchild.AttrGetter().Int("count")
+			case "forwards_count":
+				msg.ForwardsCount = subchild.AttrGetter().Int("count")
 			case "reactions":
 				msg.ReactionCounts = make(map[string]int)
 				for _, reaction := range subchild.GetChildren() {
@@ -405,10 +412,14 @@ func (cli *Client) parseNewsletterMessages(node *waBinary.Node) []*types.Newslet
 func (cli *Client) handleNewsletterNotification(ctx context.Context, node *waBinary.Node) {
 	ag := node.AttrGetter()
 	liveUpdates := node.GetChildByTag("live_updates")
+	messages, ok := liveUpdates.GetOptionalChildByTag("messages")
+	if !ok {
+		messages = liveUpdates
+	}
 	cli.dispatchEvent(&events.NewsletterLiveUpdate{
 		JID:      ag.JID("from"),
 		Time:     ag.UnixTime("t"),
-		Messages: cli.parseNewsletterMessages(&liveUpdates),
+		Messages: cli.parseNewsletterMessages(&messages),
 	})
 }
 
@@ -420,6 +431,7 @@ type newsletterEvent struct {
 	Join       *events.NewsletterJoin       `json:"xwa2_notify_newsletter_on_join"`
 	Leave      *events.NewsletterLeave      `json:"xwa2_notify_newsletter_on_leave"`
 	MuteChange *events.NewsletterMuteChange `json:"xwa2_notify_newsletter_on_mute_change"`
+	Milestone  *events.NewsletterMilestone  `json:"xwa2_notify_newsletter_milestone"`
 	// _on_admin_metadata_update -> id, thread_metadata, messages
 	// _on_metadata_update
 	// _on_state_change -> id, is_requestor, state
@@ -454,6 +466,9 @@ func (cli *Client) handleMexNotification(ctx context.Context, node *waBinary.Nod
 		} else if wrapper.Data.MuteChange != nil {
 			wrapper.Data.MuteChange.Mex = mnd
 			cli.dispatchEvent(wrapper.Data.MuteChange)
+		} else if wrapper.Data.Milestone != nil {
+			wrapper.Data.Milestone.Mex = mnd
+			cli.dispatchEvent(wrapper.Data.Milestone)
 		} else if wrapper.Data.NotifyAccountReachoutTimelock != nil {
 			wrapper.Data.NotifyAccountReachoutTimelock.Mex = mnd
 			cli.dispatchEvent(wrapper.Data.NotifyAccountReachoutTimelock)
@@ -492,7 +507,11 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 	case "encrypt":
 		go cli.handleEncryptNotification(ctx, node)
 	case "server_sync":
-		go cli.handleAppStateNotification(ctx, node)
+		if cli.SynchronousAck {
+			cancelled = !cli.handleAppStateNotification(ctx, node)
+		} else {
+			go cli.handleAppStateNotification(ctx, node)
+		}
 	case "account_sync":
 		go cli.handleAccountSyncNotification(ctx, node)
 	case "devices":
@@ -532,6 +551,14 @@ func (cli *Client) handleNotification(ctx context.Context, node *waBinary.Node) 
 		cli.handlePasskeyNotification(ctx, node)
 	case "crsc_continuation":
 		go cli.tryHandlePasskeyContinuationNotification(ctx, node)
+	case "companion_reg_refresh":
+		_, refresh := node.GetOptionalChildByTag("companion_reg_refresh")
+		_, rotateQR := node.GetOptionalChildByTag("pair-device-rotate-qr")
+		if refresh || rotateQR {
+			cli.rotateADVSecret(ctx)
+		} else {
+			cli.Log.Debugf("Unrecognized companion reg refresh notification: %s", node)
+		}
 	// Other types: business, disappearing_mode, server, status, pay, psa
 	default:
 		cli.Log.Debugf("Unhandled notification with type %s", notifType)

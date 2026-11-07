@@ -99,6 +99,16 @@ func preparePostgresV13Fixture(t *testing.T) (context.Context, string, *sql.DB, 
 		t.Fatalf("failed to open PostgreSQL v13 fixture: %v", err)
 	}
 	t.Cleanup(func() { _ = fixtureDB.Close() })
+	// Remove newer additive fields only in this UUID-isolated synthetic fixture,
+	// so its metadata and structure both represent v13 before testing upgrades.
+	for _, statement := range []string{
+		"ALTER TABLE whatsmeow_device DROP COLUMN companion_meta_nonce",
+		"ALTER TABLE whatsmeow_chat_settings DROP COLUMN wasa_root_secret_id",
+	} {
+		if _, err = fixtureDB.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("failed to remove post-v14 fixture column: %v", err)
+		}
+	}
 	if _, err = fixtureDB.ExecContext(ctx, "DROP TABLE whatsmeow_nct_salt"); err != nil {
 		t.Fatalf("failed to remove v14 table from fixture: %v", err)
 	}
@@ -177,14 +187,24 @@ func waitForPostgresAdvisoryWaiters(
 	}
 }
 
-func assertPostgresSchemaV14(t *testing.T, ctx context.Context, db *sql.DB) {
+func assertPostgresSchemaV16(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	var version, compat int
 	if err := db.QueryRowContext(ctx, "SELECT version, compat FROM whatsmeow_version").Scan(&version, &compat); err != nil {
 		t.Fatalf("failed to read final schema version: %v", err)
 	}
-	if version != 14 || compat != 8 {
-		t.Fatalf("final schema version = v%d compat v%d, want v14 compat v8", version, compat)
+	if version != 16 || compat != 8 {
+		t.Fatalf("final schema version = v%d compat v%d, want v16 compat v8", version, compat)
+	}
+	var rows, columns int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM whatsmeow_version").Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("schema version row count = %d, want 1 (error %v)", rows, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema=current_schema() AND is_nullable='NO' AND column_default IS NOT NULL
+		AND ((table_name='whatsmeow_device' AND column_name='companion_meta_nonce')
+		OR (table_name='whatsmeow_chat_settings' AND column_name='wasa_root_secret_id'))`).Scan(&columns); err != nil || columns != 2 {
+		t.Fatalf("additive schema columns = %d, want 2 (error %v)", columns, err)
 	}
 	var tableName sql.NullString
 	if err := db.QueryRowContext(ctx, "SELECT to_regclass('whatsmeow_nct_salt')").Scan(&tableName); err != nil {
@@ -273,7 +293,7 @@ func TestConcurrentPostgresUpgradeIsSerializedWithRepeatableReadDefault(t *testi
 			t.Errorf("concurrent PostgreSQL upgrade failed: %v", err)
 		}
 	}
-	assertPostgresSchemaV14(t, ctx, fixtureDB)
+	assertPostgresSchemaV16(t, ctx, fixtureDB)
 }
 
 func TestPostgresUpgradeLockWaitHonorsContextCancellation(t *testing.T) {
@@ -304,5 +324,5 @@ func TestPostgresUpgradeLockWaitHonorsContextCancellation(t *testing.T) {
 	if err = retryContainer.Close(); err != nil {
 		t.Fatalf("failed to close recovered PostgreSQL container: %v", err)
 	}
-	assertPostgresSchemaV14(t, ctx, fixtureDB)
+	assertPostgresSchemaV16(t, ctx, fixtureDB)
 }
